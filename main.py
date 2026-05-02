@@ -269,6 +269,106 @@ def run_m3_prediction(df):
     print(f"  MAE (平均绝对误差):  {rf_mae:.2f} 单/小时")
     print(f"  RMSE (均方根误差):   {rf_rmse:.2f} 单/小时")
 
+# M4: 问答接口模块 (包含选做: 大模型 API 接入)
+# ==========================================
+def run_m4_qa_system(df):
+    print("\n" + "="*40)
+    print("[M4] >>> 启动智能问答系统 (Rule-based + LLM)")
+    print("="*40)
+    print("您现在可以向我提问关于纽约市出租车出行数据的问题。")
+    print("支持的问题类型例如：")
+    print("1. [基本信息] '这次分析的数据量有多少？'")
+    print("2. [时间规律] '一天中哪个时段打车人最多？'")
+    print("3. [区域热度] '排名前十的上客区域是哪些？'")
+    print("4. [车费影响] '车费和距离是什么关系？'")
+    print("5. [预测模型] '预测模型的表现怎么样？'")
+    print("如果您问了其他通识性问题，系统将自动调用大模型为您解答。")
+    print("输入 'exit' 或 'quit' 退出系统。\n")
+
+    # ---------------------------------------------------------
+    # 选做：大模型 API 配置
+    # ---------------------------------------------------------
+    # 填入你的真实 API Key。如果没有，代码依然能跑，只是兜底回复会变成系统提示。
+    # 这里以 DeepSeek 为例，兼容 OpenAI 格式。
+    API_KEY = input("请粘贴你的智谱/DeepSeek API Key (回车跳过则仅使用本地引擎): ").strip()
+    
+    client = None
+    if OpenAI and API_KEY != "YOUR_API_KEY_HERE":
+        client = OpenAI(api_key=API_KEY, base_url="https://api.deepseek.com/v1")
+
+    # 【重要】这就是你的 System Prompt，务必写进期末报告里！
+    system_prompt = """
+    你是一个名为"纽约出租车数据洞察者"的 AI 助手。
+    你的核心任务是：帮助用户解答关于城市交通、出租车出行习惯、以及数据科学/机器学习概念的通识问题。
+    约束条件：
+    1. 保持专业、客观、简洁（回答控制在 150 字以内）。
+    2. 如果用户问了和交通、数据科学、纽约市毫无关系的问题（如娱乐八卦、菜谱），请委婉拒绝，并引导他们询问数据相关的问题。
+    3. 你无法直接看到本地生成的图表，请基于你的先验知识回答理论问题。
+    """
+
+    # ---------------------------------------------------------
+    # 问答 While 循环
+    # ---------------------------------------------------------
+    while True:
+        try:
+            user_input = input("\n[乘客您好，请提问]: ").strip()
+        except EOFError:
+            break
+            
+        if user_input.lower() in ['exit', 'quit', '退出']:
+            print("[系统]: 感谢使用城市出租车数据智能问答系统，再见！")
+            break
+            
+        if not user_input:
+            continue
+
+        # 1. 规则匹配 (正则表达式提取关键词)
+        if re.search(r"多少(条|数据)|基本信息|数据量|质量", user_input):
+            print(f"[本地引擎]: 本次分析使用的是纽约市2023年1月黄色出租车数据。经过 M1 模块严格清洗后，共保留了 {len(df)} 条高质量记录。")
+
+        elif re.search(r"时间|规律|几点|时段|什么时候", user_input):
+            print("[本地引擎]: 根据 M2 模块分析，工作日和周末的出行高峰有显著差异（如工作日有明显的早晚双高峰）。")
+            print("👉 图表已生成，请查看路径: outputs/1_time_pattern.png")
+
+        elif re.search(r"热点|热门|排名|上客|区域|哪里", user_input):
+            print("[本地引擎]: 上客量最高的 Top 10 区域主要集中在曼哈顿核心商业区及三大机场。")
+            print("👉 图表已生成，请查看路径: outputs/2_top10_regions.png")
+
+        elif re.search(r"车费|距离|钱|影响因素|多贵", user_input):
+            print("[本地引擎]: M2 模块的散点图显示，行程距离是决定车费的绝对核心因素，整体呈强正相关。")
+            print("👉 图表已生成，请查看路径: outputs/3_fare_factors.png")
+
+        elif re.search(r"机场|红眼航班|占比", user_input):
+            print("[本地引擎]: 分析发现，在凌晨 4-6 点等市区出行低谷期，机场出发的订单占比会异常飙升。")
+            print("👉 图表已生成，请查看路径: outputs/4_hourly_airport_ratio.png")
+            
+        elif re.search(r"预测|模型|MAE|RMSE|效果", user_input):
+            print("[本地引擎]: 在 M3 模块的区域需求量预测实验中，我们对比了 PyTorch 神经网络与随机森林。")
+            print("结论：随机森林(MAE约26)在当前表格数据特征下，优于简单的神经网络(MAE约60)。")
+            print("👉 NN 训练 Loss 曲线路径: outputs/3_pytorch_loss_curve.png")
+
+        # 2. 规则未命中，调用大模型 API 兜底
+        else:
+            if client:
+                print("[大模型思考中...]", end="\r")
+                try:
+                    response = client.chat.completions.create(
+                        model="deepseek-chat", # 如果用 Qwen 就是 qwen-turbo，GLM 就是 glm-4
+                        messages=[
+                            {"role": "system", "content": system_prompt},
+                            {"role": "user", "content": user_input}
+                        ],
+                        temperature=0.7
+                    )
+                    reply = response.choices[0].message.content
+                    # 消除 "大模型思考中" 提示，打印正式回复
+                    print(" " * 20, end="\r") 
+                    print(f"[云端大模型]: {reply}")
+                except Exception as e:
+                    print(f"[系统报错]: 大模型 API 调用失败。请检查网络或 API Key 额度。错误信息: {e}")
+            else:
+                print("[系统规则拦截]: 抱歉，本地知识库无法匹配该问题。")
+                print("（注：代码中尚未配置真实的 API_KEY，大模型云端求助功能暂未激活。您可以在代码 API_KEY 处填入您的密钥体验选做功能。）")
 
 def main():
     print("城市出租车出行数据分析与智能问答系统")
