@@ -269,12 +269,9 @@ def run_m3_prediction(df):
     print(f"  MAE (平均绝对误差):  {rf_mae:.2f} 单/小时")
     print(f"  RMSE (均方根误差):   {rf_rmse:.2f} 单/小时")
 
-# M4: 问答接口模块 (包含选做: 大模型 API 接入)
-# ==========================================
+# M4:问答，大模型API接入
 def run_m4_qa_system(df):
-    print("\n" + "="*40)
-    print("[M4] >>> 启动智能问答系统 (Rule-based + LLM)")
-    print("="*40)
+    print("启动智能问答系统")
     print("您现在可以向我提问关于纽约市出租车出行数据的问题。")
     print("支持的问题类型例如：")
     print("1. [基本信息] '这次分析的数据量有多少？'")
@@ -285,18 +282,15 @@ def run_m4_qa_system(df):
     print("如果您问了其他通识性问题，系统将自动调用大模型为您解答。")
     print("输入 'exit' 或 'quit' 退出系统。\n")
 
-    # ---------------------------------------------------------
-    # 选做：大模型 API 配置
-    # ---------------------------------------------------------
-    # 填入你的真实 API Key。如果没有，代码依然能跑，只是兜底回复会变成系统提示。
-    # 这里以 DeepSeek 为例，兼容 OpenAI 格式。
-    API_KEY = input("请粘贴你的智谱/DeepSeek API Key (回车跳过则仅使用本地引擎): ").strip()
+    API_KEY = input("请粘贴API Key: ").strip()
     
     client = None
-    if OpenAI and API_KEY != "YOUR_API_KEY_HERE":
-        client = OpenAI(api_key=API_KEY, base_url="https://api.deepseek.com/v1")
+    if OpenAI and API_KEY:
+        client = OpenAI(
+            api_key=API_KEY, 
+            base_url="https://open.bigmodel.cn/api/paas/v4" 
+        )
 
-    # 【重要】这就是你的 System Prompt，务必写进期末报告里！
     system_prompt = """
     你是一个名为"纽约出租车数据洞察者"的 AI 助手。
     你的核心任务是：帮助用户解答关于城市交通、出租车出行习惯、以及数据科学/机器学习概念的通识问题。
@@ -305,10 +299,8 @@ def run_m4_qa_system(df):
     2. 如果用户问了和交通、数据科学、纽约市毫无关系的问题（如娱乐八卦、菜谱），请委婉拒绝，并引导他们询问数据相关的问题。
     3. 你无法直接看到本地生成的图表，请基于你的先验知识回答理论问题。
     """
-
-    # ---------------------------------------------------------
     # 问答 While 循环
-    # ---------------------------------------------------------
+
     while True:
         try:
             user_input = input("\n[乘客您好，请提问]: ").strip()
@@ -322,7 +314,7 @@ def run_m4_qa_system(df):
         if not user_input:
             continue
 
-        # 1. 规则匹配 (正则表达式提取关键词)
+        # 提取关键词
         if re.search(r"多少(条|数据)|基本信息|数据量|质量", user_input):
             print(f"[本地引擎]: 本次分析使用的是纽约市2023年1月黄色出租车数据。经过 M1 模块严格清洗后，共保留了 {len(df)} 条高质量记录。")
 
@@ -347,28 +339,25 @@ def run_m4_qa_system(df):
             print("结论：随机森林(MAE约26)在当前表格数据特征下，优于简单的神经网络(MAE约60)。")
             print("👉 NN 训练 Loss 曲线路径: outputs/3_pytorch_loss_curve.png")
 
-        # 2. 规则未命中，调用大模型 API 兜底
+        # 2. 规则未命中，调用大模型API
         else:
             if client:
-                print("[大模型思考中...]", end="\r")
+                print("[智谱 AI 正在思考中...]", end="\r")
                 try:
                     response = client.chat.completions.create(
-                        model="deepseek-chat", # 如果用 Qwen 就是 qwen-turbo，GLM 就是 glm-4
+                        model="glm-4-flash", 
                         messages=[
                             {"role": "system", "content": system_prompt},
                             {"role": "user", "content": user_input}
                         ],
-                        temperature=0.7
+                        top_p=0.7,
+                        temperature=0.9
                     )
                     reply = response.choices[0].message.content
-                    # 消除 "大模型思考中" 提示，打印正式回复
-                    print(" " * 20, end="\r") 
-                    print(f"[云端大模型]: {reply}")
+                    print(" " * 25, end="\r") 
+                    print(f"[智谱大模型]: {reply}")
                 except Exception as e:
-                    print(f"[系统报错]: 大模型 API 调用失败。请检查网络或 API Key 额度。错误信息: {e}")
-            else:
-                print("[系统规则拦截]: 抱歉，本地知识库无法匹配该问题。")
-                print("（注：代码中尚未配置真实的 API_KEY，大模型云端求助功能暂未激活。您可以在代码 API_KEY 处填入您的密钥体验选做功能。）")
+                    print(f"[系统报错]: 接口调用失败，错误信息: {e}")
 
 def main():
     print("城市出租车出行数据分析与智能问答系统")
