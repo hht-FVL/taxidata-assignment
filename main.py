@@ -4,6 +4,17 @@ import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
 import torch
+import torch.nn as nn
+import torch.optim as optim
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler
+from sklearn.metrics import mean_absolute_error, mean_squared_error
+from sklearn.ensemble import RandomForestRegressor
+import re
+try:
+    from openai import OpenAI
+except ImportError:
+    OpenAI = None
 
 plt.rcParams['font.sans-serif'] = ['SimHei', 'Arial Unicode MS', 'sans-serif']
 plt.rcParams['axes.unicode_minus'] = False
@@ -152,6 +163,113 @@ def run_m2_analysis(df):
     plt.savefig(os.path.join(out_dir, '4_hourly_airport_ratio.png'), dpi=300)
     plt.close()
 
+# 预测模型模块
+# 定义PyTorch神经网络模型
+class DemandPredictorNN(nn.Module):
+    def __init__(self, input_dim):
+        super(DemandPredictorNN, self).__init__()
+        self.net = nn.Sequential(
+            nn.Linear(input_dim, 64),
+            nn.ReLU(),
+            nn.Linear(64, 32),
+            nn.ReLU(),
+            nn.Linear(32, 1) # 输出层
+        )
+        
+    def forward(self, x):
+        return self.net(x)
+
+def run_m3_prediction(df):
+    print("\n开始构建和训练预测模型")
+    # 构造训练数据
+    # 按日期、小时、区域聚合，计算总单量
+    df['pickup_date'] = df['tpep_pickup_datetime'].dt.date
+    agg_df = df.groupby(['pickup_date', 'pickup_hour', 'PULocationID', 'pickup_weekday', 'is_peak_hour', 'is_weekend']).size().reset_index(name='demand')
+    
+    # 避免数据量过大,选取单量最活跃的Top 20区域进行训练预测
+    top20_locs = agg_df.groupby('PULocationID')['demand'].sum().nlargest(20).index
+    model_df = agg_df[agg_df['PULocationID'].isin(top20_locs)].copy()
+    # 提取特征列和目标列
+    feature_cols = ['PULocationID', 'pickup_hour', 'pickup_weekday', 'is_weekend', 'is_peak_hour']
+    X = model_df[feature_cols].values
+    y = model_df['demand'].values
+    
+    # 划分训练集和测试集
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+    
+    # 数据标准化
+    scaler = StandardScaler()
+    X_train_scaled = scaler.fit_transform(X_train)
+    X_test_scaled = scaler.transform(X_test)
+
+    # PyTorch神经网络训练
+    # 转换为 PyTorch 张量
+    X_train_tensor = torch.tensor(X_train_scaled, dtype=torch.float32)
+    y_train_tensor = torch.tensor(y_train, dtype=torch.float32).view(-1, 1)
+    X_test_tensor = torch.tensor(X_test_scaled, dtype=torch.float32)
+    y_test_tensor = torch.tensor(y_test, dtype=torch.float32).view(-1, 1)
+    
+    # 初始化模型、损失函数(MSE)和优化器(Adam)
+    input_dim = X_train.shape[1]
+    nn_model = DemandPredictorNN(input_dim)
+    criterion = nn.MSELoss()
+    optimizer = optim.Adam(nn_model.parameters(), lr=0.01)
+    
+    epochs = 200
+    train_losses = []
+    
+    for epoch in range(epochs):
+        # 前向传播
+        outputs = nn_model(X_train_tensor)
+        loss = criterion(outputs, y_train_tensor)
+        
+        # 反向传播和优化
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+        
+        train_losses.append(loss.item())
+        if (epoch+1) % 50 == 0:
+            print(f"     Epoch [{epoch+1}/{epochs}], Loss: {loss.item():.4f}")
+            
+    # 绘制 Loss 曲线
+    plt.figure(figsize=(8, 5))
+    plt.plot(train_losses, label='Training Loss')
+    plt.title('PyTorch Model Training Loss')
+    plt.xlabel('Epoch')
+    plt.ylabel('MSE Loss')
+    plt.legend()
+    plt.savefig('outputs/pytorch_loss_curve.png')
+    plt.close()
+    print("  -> Loss 曲线已保存至 outputs/pytorch_loss_curve.png")
+    
+    # 神经网络评估
+    nn_model.eval()
+    with torch.no_grad():
+        nn_preds = nn_model(X_test_tensor).numpy()
+    
+    nn_mae = mean_absolute_error(y_test, nn_preds)
+    nn_rmse = np.sqrt(mean_squared_error(y_test, nn_preds))
+    
+    # 3. 随机森林对比实验
+    print("训练随机森林进行对比")
+    rf_model = RandomForestRegressor(n_estimators=100, max_depth=10, random_state=42, n_jobs=-1)
+    rf_model.fit(X_train, y_train)
+    rf_preds = rf_model.predict(X_test)
+    
+    rf_mae = mean_absolute_error(y_test, rf_preds)
+    rf_rmse = np.sqrt(mean_squared_error(y_test, rf_preds))
+    
+    # 4. 对比实验的情况分析
+    print("M3 预测模型性能对比(测试集)")
+    print(f"【PyTorch 神经网络】:")
+    print(f"  MAE (平均绝对误差):  {nn_mae:.2f} 单/小时")
+    print(f"  RMSE (均方根误差):   {nn_rmse:.2f} 单/小时")
+    print(f"\n【Random Forest 随机森林】:")
+    print(f"  MAE (平均绝对误差):  {rf_mae:.2f} 单/小时")
+    print(f"  RMSE (均方根误差):   {rf_rmse:.2f} 单/小时")
+
+
 def main():
     print("城市出租车出行数据分析与智能问答系统")
     if not os.path.exists('outputs'):
@@ -166,7 +284,8 @@ def main():
     print("\n数据处理完毕，前 3 行预览:")
     print(df_final[['tpep_pickup_datetime', 'trip_distance', 'fare_amount', 'is_peak_hour', 'average_speed_mph']].head(3))
     run_m2_analysis(df_final)
-
+    run_m3_prediction(df_final)
+    run_m4_qa_system(df_final)
 
 if __name__ == "__main__":
     main()
